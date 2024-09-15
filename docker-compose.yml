@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:13
+    container_name: db_container1
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - app_network
+
+  api:
+    build: .
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${DB_USER}:${DB_PASSWORD}@db/${DB_NAME}
+    depends_on:
+      - db
+    networks:
+      - app_network
+    volumes:
+      - .:/app
+
+  bot:
+    build: .
+    command: python bot/bot.py
+    depends_on:
+      - api
+    networks:
+      - app_network
+    environment:
+      - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
+      - PYTHONPATH=/app
+    restart: always
+
+networks:
+  app_network:
+
+volumes:
+  postgres_data:
