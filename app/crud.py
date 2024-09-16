@@ -90,3 +90,23 @@ async def get_or_create_tag(db_session: AsyncSession, tag_name: str):
 async def get_notes_by_user(db_session: AsyncSession, user_id: int):
     result = await db_session.execute(select(Note).filter(Note.user_id == user_id))
     return result.scalars().all()
+
+async def get_note_by_id(db_session: AsyncSession, note_id: int):
+    result = await db_session.execute(select(Note).filter(Note.id == note_id))
+    return result.scalars().first()
+
+async def update_note(db_session: AsyncSession, note_id: int, new_title: str, new_content: str):
+    result = await db_session.execute(select(Note).filter(Note.id == note_id))
+    note = result.scalars().first()
+
+    if note:
+        note.title = new_title
+        note.content = new_content
+        try:
+            await db_session.commit()
+            await db_session.refresh(note)
+        except Exception as e:
+            await db_session.rollback()
+            logging.error(f"Ошибка обновления заметки: {e}")
+            raise
+    return note

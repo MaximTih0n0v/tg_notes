@@ -10,9 +10,11 @@ import logging
 from sqlalchemy.orm import sessionmaker
 from app.crud import (
     create_note, get_user_by_username, create_user, NoteCreate, get_or_create_tag, get_notes_by_user,
-    search_notes_by_tags
+    search_notes_by_tags, get_note_by_id, update_note
 )
 from app.database import AsyncSessionLocal, DATABASE_URL
+from keyboards import start_kb
+from bot_cmds import private
 
 load_dotenv()
 
@@ -23,8 +25,14 @@ TG_TOKEN = os.getenv('TELEGRAM_TOKEN')
 # Dictionary to store user states
 user_states = {}
 
+bot = None
+
+async def on_startup(dp: Dispatcher):
+    await bot.set_my_commands(private)
+
 async def send_welcome(message: Message):
-    await message.reply("Привет! Я помогу создать заметку. Используйте команду /add_note.")
+    await message.reply("Привет! Я помогу создать заметку. Используйте команду /add_note.",
+                        reply_markup=start_kb)
 
 async def add_note_command(message: Message):
     await message.reply("Введите заголовок заметки:")
@@ -37,6 +45,7 @@ async def handle_message(message: Message, db_session: AsyncSession):
     if user_id in user_states:
         user_state = user_states[user_id]
 
+        # Этап создания заметки
         if user_state["state"] == "awaiting_title":
             user_state["title"] = message.text
             user_state["state"] = "awaiting_note"
@@ -77,6 +86,50 @@ async def handle_message(message: Message, db_session: AsyncSession):
 
             del user_states[user_id]
 
+        # Этап редактирования заметки
+        elif user_state["state"] == "awaiting_note_id_for_edit":
+            try:
+                note_id = int(message.text)
+                # Получаем заметку по ID
+                note = await get_note_by_id(db_session, note_id)
+
+                if note:
+                    user = await get_user_by_username(db_session, username)
+                    if user and note.user_id == user.id:
+
+                        user_state["note_id"] = note_id
+                        user_state["state"] = "awaiting_new_title"
+                        await message.reply(f"Введите новый заголовок для заметки '{note.title}':")
+                    else:
+                        await message.reply("Вы не являетесь автором этой заметки.")
+                        del user_states[user_id]
+                else:
+                    await message.reply("Заметка не найдена.")
+                    del user_states[user_id]
+            except ValueError:
+                await message.reply("Некорректный ID. Пожалуйста, введите число.")
+
+        elif user_state["state"] == "awaiting_new_title":
+            user_state["new_title"] = message.text
+            user_state["state"] = "awaiting_new_content"
+            await message.reply("Введите новый текст заметки:")
+
+        elif user_state["state"] == "awaiting_new_content":
+            new_title = user_state.get("new_title")
+            new_content = message.text
+            note_id = user_state.get("note_id")
+
+            # Обновляем заметку в базе данных
+            try:
+                await update_note(db_session, note_id, new_title, new_content)
+                await message.reply(f"Заметка с ID {note_id} успешно обновлена!")
+            except Exception as e:
+                await message.reply("Произошла ошибка при обновлении заметки.")
+                logging.error(f"Ошибка обновления заметки: {e}")
+
+            del user_states[user_id]
+
+        # Этап поиска заметок по тегам
         elif user_state["state"] == "awaiting_tags_for_search":
             tags_text = message.text
             tags = [tag.strip() for tag in tags_text.split(",") if tag.strip()]
@@ -87,6 +140,7 @@ async def handle_message(message: Message, db_session: AsyncSession):
                     notes = await search_notes_by_tags(db_session, user.id, tags)
                     if notes:
                         response = "\n\n".join([
+                            f"ID: {note.id}\n"
                             f"Заметка: {note.title}\n"
                             f"Содержание: {note.content}\n"
                             f"Теги: {', '.join([tag.name for tag in note.tags])}"
@@ -102,8 +156,10 @@ async def handle_message(message: Message, db_session: AsyncSession):
                 await message.reply("Произошла ошибка при поиске заметок. Попробуйте позже.")
             finally:
                 del user_states[user_id]
+
     else:
-        await message.reply("Я не понимаю эту команду. Используйте /add_note для создания заметки.")
+        await message.reply("Я не понимаю эту команду. Используйте /add_note для создания заметки или /edit_note для редактирования.")
+
 
 
 async def my_notes_command(message: Message, db_session: AsyncSession):
@@ -115,7 +171,7 @@ async def my_notes_command(message: Message, db_session: AsyncSession):
         if notes:
             # Формируем список с заголовками и содержанием каждой заметки
             note_details = [
-                f"Заметка: {note.title}\nСодержание: {note.content}\n" for note in notes
+                f"ID: {note.id}\nЗаметка: {note.title}\nСодержание: {note.content}\n" for note in notes
             ]
             response = "\n\n".join(note_details)  # Объединяем все заметки с разделением
             await message.reply(f"Ваши заметки:\n\n{response}")
@@ -128,6 +184,11 @@ async def search_by_tag_command(message: Message, db_session: AsyncSession):
     logging.info(f"Пользователь {message.from_user.id} начал поиск по тегам.")
     await message.reply("Введите теги для поиска через запятую:")
     user_states[message.from_user.id] = {"state": "awaiting_tags_for_search"}
+
+async def edit_note_command(message: Message, db_session: AsyncSession):
+    await message.reply("Введите ID заметки, которую хотите отредактировать:")
+    user_states[message.from_user.id] = {"state": "awaiting_note_id_for_edit"}
+
 
 def with_db_session(handler):
     async def wrapper(message: Message):
@@ -144,6 +205,7 @@ def with_db_session(handler):
     return wrapper
 
 async def main():
+    global bot
     engine = create_async_engine(DATABASE_URL, echo=True)
     async_session = sessionmaker(
         bind=engine,
@@ -157,6 +219,7 @@ async def main():
     dp.message.register(add_note_command, Command(commands=["add_note"]))
     dp.message.register(with_db_session(my_notes_command), Command(commands=["my_notes"]))
     dp.message.register(with_db_session(search_by_tag_command), Command(commands=["search_by_tag"]))
+    dp.message.register(with_db_session(edit_note_command), Command(commands=["edit_note"]))
 
     # Регистрируем только одну функцию для текстовых сообщений
     dp.message.register(with_db_session(handle_message))
