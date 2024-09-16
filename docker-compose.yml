@@ -24,6 +24,12 @@ services:
       - app_network
     volumes:
       - .:/app
+      - ./logs:/app/logs  # Монтируем папку logs для хранения логов
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   bot:
     build: .
@@ -35,6 +41,13 @@ services:
     environment:
       - TELEGRAM_TOKEN=${TELEGRAM_TOKEN}
       - PYTHONPATH=/app
+    volumes:
+      - ./logs:/app/logs  # Монтируем папку logs для хранения логов
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: always
 
 networks:

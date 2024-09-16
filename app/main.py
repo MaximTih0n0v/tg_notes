@@ -1,11 +1,6 @@
 from fastapi import FastAPI
 from .database import engine
 from .models import Base
-from .logging_config import setup_logging
-
-
-# Настройка логирования
-setup_logging()
 
 app = FastAPI()
 

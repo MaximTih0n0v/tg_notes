@@ -110,3 +110,20 @@ async def update_note(db_session: AsyncSession, note_id: int, new_title: str, ne
             logging.error(f"Ошибка обновления заметки: {e}")
             raise
     return note
+
+async def delete_note(db_session: AsyncSession, note_id: int, user_id: int):
+    result = await db_session.execute(select(Note).filter(Note.id == note_id))
+    note = result.scalars().first()
+
+    if note and note.user_id == user_id:  # Проверяем, что пользователь является автором
+        await db_session.delete(note)
+        try:
+            await db_session.commit()
+            return True  # Успешно удалено
+        except Exception as e:
+            await db_session.rollback()
+            logging.error(f"Ошибка при удалении заметки: {e}")
+            raise
+    else:
+        logging.info(f"Попытка удалить чужую заметку или несуществующую заметку. Note ID: {note_id}, User ID: {user_id}")
+        return False  # Пользователь не является автором заметки или заметка не найдена

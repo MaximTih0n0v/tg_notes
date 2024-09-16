@@ -7,10 +7,11 @@ from aiogram.types import Message
 import asyncio
 from dotenv import load_dotenv
 import logging
+from logging.handlers import TimedRotatingFileHandler
 from sqlalchemy.orm import sessionmaker
 from app.crud import (
     create_note, get_user_by_username, create_user, NoteCreate, get_or_create_tag, get_notes_by_user,
-    search_notes_by_tags, get_note_by_id, update_note
+    search_notes_by_tags, get_note_by_id, update_note, delete_note
 )
 from app.database import AsyncSessionLocal, DATABASE_URL
 from keyboards import start_kb
@@ -18,9 +19,33 @@ from bot_cmds import private
 
 load_dotenv()
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
 TG_TOKEN = os.getenv('TELEGRAM_TOKEN')
+
+# Создаем папку для логов, если она не существует
+if not os.path.exists('logs'):
+    os.makedirs('logs')
+
+# Удаляем существующие обработчики
+for handler in logging.root.handlers[:]:
+    logging.root.removeHandler(handler)
+
+# Формат логов
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+
+# Создание обработчика с ротацией логов
+file_handler = TimedRotatingFileHandler('logs/app.log', when='midnight', interval=1)
+file_handler.setFormatter(formatter)
+file_handler.setLevel(logging.DEBUG)
+
+# Конфигурация логгера
+logging.basicConfig(level=logging.INFO, handlers=[file_handler])
+
+# Тестовое сообщение
+logging.info("Logging setup complete. This is a test log.")
+
+# Логирование других сообщений
+logging.info("Бот запускается...")
+
 
 # Dictionary to store user states
 user_states = {}
@@ -157,6 +182,9 @@ async def handle_message(message: Message, db_session: AsyncSession):
             finally:
                 del user_states[user_id]
 
+        elif user_state["state"] == "awaiting_note_id_for_delete":
+            await handle_delete_note_state(message, db_session)
+
     else:
         await message.reply("Я не понимаю эту команду. Используйте /add_note для создания заметки или /edit_note для редактирования.")
 
@@ -189,6 +217,41 @@ async def edit_note_command(message: Message, db_session: AsyncSession):
     await message.reply("Введите ID заметки, которую хотите отредактировать:")
     user_states[message.from_user.id] = {"state": "awaiting_note_id_for_edit"}
 
+async def delete_note_command(message: Message, db_session: AsyncSession):
+    user_id = message.from_user.id
+    username = message.from_user.username
+
+    user = await get_user_by_username(db_session, username)
+    if not user:
+        await message.reply("Пользователь не найден.")
+        return
+
+    await message.reply("Введите ID заметки, которую хотите удалить:")
+    user_states[user_id] = {"state": "awaiting_note_id_for_delete"}
+
+
+async def handle_delete_note_state(message: Message, db_session: AsyncSession):
+    user_id = message.from_user.id
+    username = message.from_user.username
+
+    if user_id in user_states and user_states[user_id]["state"] == "awaiting_note_id_for_delete":
+        try:
+            note_id = int(message.text)
+            user = await get_user_by_username(db_session, username)
+
+            if user:
+                success = await delete_note(db_session, note_id, user.id)
+                if success:
+                    await message.reply(f"Заметка с ID {note_id} успешно удалена.")
+                else:
+                    await message.reply(f"Не удалось удалить заметку с ID {note_id}. Возможно, вы не являетесь её автором.")
+            else:
+                await message.reply("Пользователь не найден.")
+        except ValueError:
+            await message.reply("Некорректный ID. Пожалуйста, введите число.")
+        finally:
+            del user_states[user_id]
+
 
 def with_db_session(handler):
     async def wrapper(message: Message):
@@ -220,6 +283,7 @@ async def main():
     dp.message.register(with_db_session(my_notes_command), Command(commands=["my_notes"]))
     dp.message.register(with_db_session(search_by_tag_command), Command(commands=["search_by_tag"]))
     dp.message.register(with_db_session(edit_note_command), Command(commands=["edit_note"]))
+    dp.message.register(with_db_session(delete_note_command), Command(commands=["delete_note"]))
 
     # Регистрируем только одну функцию для текстовых сообщений
     dp.message.register(with_db_session(handle_message))

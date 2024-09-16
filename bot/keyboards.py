@@ -4,13 +4,19 @@ from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 start_kb = ReplyKeyboardMarkup(
     keyboard=[
         [
-            KeyboardButton(text="Добавить заметку"),
-            KeyboardButton(text="Мои заметки"),
+            KeyboardButton(text="/add_note"),
+            KeyboardButton(text="/my_notes"),
         ],
         [
-            KeyboardButton(text="Поиск по тегам"),
+            KeyboardButton(text="/search_by_tag"),
+        ],
+        [
+            KeyboardButton(text="/edit_note"),
+        ],
+        [
+            KeyboardButton(text="/delete_note"),
         ],
     ],
     resize_keyboard=True,
-    input_field_placeholder="Что Вас интересует?"
+    input_field_placeholder="Работаем с заметками ..."
 )
